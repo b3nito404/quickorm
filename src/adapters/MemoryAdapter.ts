@@ -5,8 +5,8 @@ export class MemoryAdapter implements Adapter {
   private store: Record<string, any[]> = {};
 
   async find(entity: string, query: Record<string, any> = {}) {
-    const col = this.store[entity] ?? [];
-    return col.filter(item => Object.entries(query).every(([k,v]) => item[k] === v));
+    const collection = this.store[entity] ?? [];
+    return collection.filter(item => Object.entries(query).every(([k,v]) => item[k] === v));
   }
 
   async insert(entity: string, data: Record<string, any>) {
@@ -18,21 +18,18 @@ export class MemoryAdapter implements Adapter {
   }
 
 
-  async delete(entity: string, id: string|number) {
-    const col = this.store[entity] ?? [];
-    const before = col.length;
-    this.store[entity] = col.filter(r => r.id !== id);
-    return this.store[entity].length !== before;
-  }
-
-
   async update(entity : string, id: string| number, patch: Record<string, any>) {
-    const col = this.store[entity] ?? [];
-    const idx = col.findIndex(r => r.idx === r);
+    const collection = this.store[entity] ?? [];
+    const index = collection.findIndex(r => r.idx === r);
 
-    //this.find[entity] = idx.filter((e) => e.row != e );
-  if (idx === -1) return null;
-      col[idx] = {...col, ...patch};
-       return col[idx];
+  if (index === -1) return null;
+      collection[index] = {...collection, ...patch};
+       return {...collection[index]};
+    }
   }
-}
+
+  async delete(entity : string , id: string | number) {
+    const collection = this.store[entity] ?? [];
+    initialLength = collection.filter(item => item.id !== id);
+  }
+  

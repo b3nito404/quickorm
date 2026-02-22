@@ -1,3 +1,3 @@
 # QuickORM
 
-Mini-ORM en TypeScript 
+ORM en typescript 

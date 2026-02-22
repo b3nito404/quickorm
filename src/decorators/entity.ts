@@ -1,3 +1,3 @@
 export function Entity(name?: string) {
-  return function(constructor: Function) { /* metadata placeholder */ };
+  return function(constructor: Function) 
 }
