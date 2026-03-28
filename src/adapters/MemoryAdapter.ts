@@ -1,0 +1,366 @@
+import { BaseAdapter } from './Adapter';
+import { QueryResult, DataSourceConfig } from '../types';
+import { QueryError } from '../errors/OrmError';
+
+type Row = Record<string, any>;
+type Table = Row[];
+
+/**
+ * A fully in-memory adapter — no database required.
+ * Perfect for unit tests and rapid prototyping.
+ *
+ * It parses a limited subset of SQL so the same Repository / QueryBuilder
+ * code works without any actual database.
+ */
+export class MemoryAdapter extends BaseAdapter {
+  readonly type = 'memory';
+
+  private tables: Map<string, Table> = new Map();
+  private autoIncrements: Map<string, number> = new Map();
+  private inTransaction: boolean = false;
+  private snapshot: Map<string, Table> | null = null;
+
+  // ── Lifecycle ──────────────────────────────────────────────────────────────
+
+  async connect(_config: DataSourceConfig): Promise<void> {
+    this._connected = true;
+  }
+
+  async disconnect(): Promise<void> {
+    this._connected = false;
+    this.tables.clear();
+  }
+
+  // ── Transactions ───────────────────────────────────────────────────────────
+
+  async beginTransaction(): Promise<void> {
+    this.inTransaction = true;
+    // Deep-clone table state for rollback
+    this.snapshot = new Map(
+      Array.from(this.tables.entries()).map(([k, v]) => [k, v.map((r) => ({ ...r }))])
+    );
+  }
+
+  async commitTransaction(): Promise<void> {
+    this.inTransaction = false;
+    this.snapshot = null;
+  }
+
+  async rollbackTransaction(): Promise<void> {
+    if (this.snapshot) {
+      this.tables = this.snapshot;
+      this.snapshot = null;
+    }
+    this.inTransaction = false;
+  }
+
+  // ── DDL ───────────────────────────────────────────────────────────────────
+
+  quoteIdentifier(id: string): string {
+    return `"${id}"`;
+  }
+
+  getPlaceholder(_index: number): string {
+    return '?';
+  }
+
+  // ── Core query engine ──────────────────────────────────────────────────────
+
+  async query<T = any>(sql: string, params: any[] = []): Promise<QueryResult<T>> {
+    const s = sql.trim();
+    try {
+      if (/^CREATE\s+TABLE/i.test(s))  return this.execCreateTable(s);
+      if (/^DROP\s+TABLE/i.test(s))    return this.execDropTable(s);
+      if (/^INSERT\s+INTO/i.test(s))   return this.execInsert(s, params);
+      if (/^SELECT/i.test(s))          return this.execSelect(s, params);
+      if (/^UPDATE/i.test(s))          return this.execUpdate(s, params);
+      if (/^DELETE\s+FROM/i.test(s))   return this.execDelete(s, params);
+      if (/^CREATE\s+INDEX/i.test(s))  return { rows: [], rowCount: 0 }; // no-op
+      if (/^DROP\s+INDEX/i.test(s))    return { rows: [], rowCount: 0 };
+      if (/^ALTER\s+TABLE/i.test(s))   return this.execAlterTable(s);
+      // Passthrough for unsupported — return empty
+      return { rows: [], rowCount: 0 };
+    } catch (err: any) {
+      throw new QueryError(err.message, sql, params, err);
+    }
+  }
+
+  // ── Table management (public helpers for SchemaBuilder) ───────────────────
+
+  ensureTable(name: string): void {
+    if (!this.tables.has(name)) this.tables.set(name, []);
+  }
+
+  getTable(name: string): Table {
+    return this.tables.get(name) ?? [];
+  }
+
+  tableExists(name: string): boolean {
+    return this.tables.has(name);
+  }
+
+  // ── DDL Executors ──────────────────────────────────────────────────────────
+
+  private execCreateTable(sql: string): QueryResult {
+    const match = sql.match(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?(\w+)"?/i);
+    if (match) {
+      const name = match[1];
+      if (!this.tables.has(name)) this.tables.set(name, []);
+    }
+    return { rows: [], rowCount: 0 };
+  }
+
+  private execDropTable(sql: string): QueryResult {
+    const match = sql.match(/DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?"?(\w+)"?/i);
+    if (match) this.tables.delete(match[1]);
+    return { rows: [], rowCount: 0 };
+  }
+
+  private execAlterTable(sql: string): QueryResult {
+    // For ALTER TABLE … ADD COLUMN — just ensure table exists
+    return { rows: [], rowCount: 0 };
+  }
+
+  // ── DML Executors ──────────────────────────────────────────────────────────
+
+  private execInsert(sql: string, params: any[]): QueryResult {
+    // INSERT INTO "table" ("col1","col2") VALUES (?,?)
+    const tableMatch = sql.match(/INSERT\s+INTO\s+"?(\w+)"?/i);
+    if (!tableMatch) throw new Error('Malformed INSERT statement');
+    const tableName = tableMatch[1];
+
+    const colMatch = sql.match(/\(([^)]+)\)\s+VALUES/i);
+    if (!colMatch) throw new Error('Could not parse INSERT columns');
+
+    const columns = colMatch[1]
+      .split(',')
+      .map((c) => c.trim().replace(/"/g, ''));
+
+    const row: Row = {};
+    columns.forEach((col, i) => {
+      row[col] = params[i] ?? null;
+    });
+
+    this.ensureTable(tableName);
+    this.tables.get(tableName)!.push(row);
+
+    return { rows: [row], rowCount: 1 };
+  }
+
+  private execSelect<T>(sql: string, params: any[]): QueryResult<T> {
+    // Support: SELECT * FROM "table" WHERE col = ? AND col2 = ? ORDER BY col ASC LIMIT n OFFSET n
+    const tableMatch = sql.match(/FROM\s+"?(\w+)"?/i);
+    if (!tableMatch) throw new Error('Could not parse SELECT table');
+    const tableName = tableMatch[1];
+
+    let rows: Row[] = [...(this.tables.get(tableName) ?? [])];
+
+    // WHERE
+    rows = this.applyWhere(rows, sql, params);
+
+    // ORDER BY
+    const orderMatch = sql.match(/ORDER\s+BY\s+(.+?)(?:\s+LIMIT|\s+OFFSET|$)/i);
+    if (orderMatch) {
+      const parts = orderMatch[1].trim().split(',');
+      for (const part of parts.reverse()) {
+        const m = part.trim().match(/"?(\w+)"?\s*(ASC|DESC)?/i);
+        if (m) {
+          const field = m[1];
+          const dir   = (m[2] ?? 'ASC').toUpperCase();
+          rows.sort((a, b) => {
+            const av = a[field], bv = b[field];
+            if (av == null && bv == null) return 0;
+            if (av == null) return dir === 'ASC' ? -1 : 1;
+            if (bv == null) return dir === 'ASC' ? 1 : -1;
+            return dir === 'ASC' ? (av < bv ? -1 : av > bv ? 1 : 0) : (av > bv ? -1 : av < bv ? 1 : 0);
+          });
+        }
+      }
+    }
+
+    // COUNT(*) — check for the unquoted expression form
+    if (/COUNT\(\*\)/i.test(sql) && /SELECT/i.test(sql)) {
+      // Apply WHERE first then count
+      const filtered = this.applyWhere([...rows], sql, params);
+      return { rows: [{ count: filtered.length } as any], rowCount: 1 };
+    }
+
+    // LIMIT / OFFSET
+    const limitMatch  = sql.match(/LIMIT\s+(\d+)/i);
+    const offsetMatch = sql.match(/OFFSET\s+(\d+)/i);
+    const offset = offsetMatch ? parseInt(offsetMatch[1]) : 0;
+    const limit  = limitMatch  ? parseInt(limitMatch[1]) : undefined;
+
+    if (offset) rows = rows.slice(offset);
+    if (limit !== undefined) rows = rows.slice(0, limit);
+
+    // SELECT columns
+    const selectPart = sql.match(/^SELECT\s+(.*?)\s+FROM/is)?.[1]?.trim();
+    if (selectPart && selectPart !== '*') {
+      const cols = selectPart.split(',').map((c) => c.trim().replace(/"/g, ''));
+      rows = rows.map((r) => {
+        const out: Row = {};
+        cols.forEach((c) => { out[c] = r[c]; });
+        return out;
+      });
+    }
+
+    return { rows: rows as T[], rowCount: rows.length };
+  }
+
+  private execUpdate(sql: string, params: any[]): QueryResult {
+    const tableMatch = sql.match(/UPDATE\s+"?(\w+)"?\s+SET/i);
+    if (!tableMatch) throw new Error('Malformed UPDATE statement');
+    const tableName = tableMatch[1];
+
+    const setMatch = sql.match(/SET\s+(.+?)\s+(?:WHERE|$)/is);
+    if (!setMatch) throw new Error('Could not parse SET clause');
+
+    const setParts = setMatch[1].split(',').map((p) => p.trim());
+    const setColumns: string[] = [];
+    let paramIndex = 0;
+
+    for (const part of setParts) {
+      const colMatch = part.match(/"?(\w+)"?\s*=\s*\?/);
+      if (colMatch) setColumns.push(colMatch[1]);
+    }
+
+    const setValues = params.slice(0, setColumns.length);
+    paramIndex = setColumns.length;
+    const whereParams = params.slice(paramIndex);
+
+    const table = this.tables.get(tableName) ?? [];
+    const toUpdate = this.applyWhere(table, sql, whereParams);
+
+    let updated = 0;
+    for (const row of table) {
+      if (toUpdate.includes(row)) {
+        setColumns.forEach((col, i) => { row[col] = setValues[i]; });
+        updated++;
+      }
+    }
+
+    return { rows: [], rowCount: updated };
+  }
+
+  private execDelete(sql: string, params: any[]): QueryResult {
+    const tableMatch = sql.match(/DELETE\s+FROM\s+"?(\w+)"?/i);
+    if (!tableMatch) throw new Error('Malformed DELETE statement');
+    const tableName = tableMatch[1];
+
+    const table = this.tables.get(tableName) ?? [];
+    const toDelete = this.applyWhere(table, sql, params);
+
+    const before = table.length;
+    this.tables.set(tableName, table.filter((r) => !toDelete.includes(r)));
+
+    return { rows: [], rowCount: before - this.tables.get(tableName)!.length };
+  }
+
+  // ── WHERE parsing ──────────────────────────────────────────────────────────
+
+  private applyWhere(rows: Row[], sql: string, params: any[]): Row[] {
+    const whereMatch = sql.match(/WHERE\s+(.+?)(?:\s+ORDER|\s+LIMIT|\s+OFFSET|$)/is);
+    if (!whereMatch) return rows;
+
+    const whereClause = whereMatch[1].trim();
+    const conditions  = this.parseWhereConditions(whereClause, params);
+
+    return rows.filter((row) => conditions.every((cond) => this.evalCondition(row, cond)));
+  }
+
+  private parseWhereConditions(clause: string, params: any[]): Array<{
+    col: string; op: string; val: any; connector: string;
+  }> {
+    // First, replace BETWEEN ? AND ? with a sentinel so the AND inside doesn't split
+    const betweens: Array<{ col: string }> = [];
+    let normalized = clause.replace(
+      /"?(\w+)"?\s+BETWEEN\s+\?\s+AND\s+\?/gi,
+      (_match, col) => {
+        betweens.push({ col });
+        return `__BETWEEN_${betweens.length - 1}__`;
+      }
+    );
+
+    // Split on AND/OR at word boundaries
+    const parts = normalized.split(/\s+(AND|OR)\s+/i);
+    const conditions: Array<{ col: string; op: string; val: any; connector: string }> = [];
+    let paramIdx = 0;
+    let connector = 'AND';
+
+    for (const part of parts) {
+      if (/^(AND|OR)$/i.test(part.trim())) {
+        connector = part.trim().toUpperCase();
+        continue;
+      }
+
+      const trimmedPart = part.trim();
+
+      // Restore BETWEEN sentinel
+      const btMatch = trimmedPart.match(/^__BETWEEN_(\d+)__$/);
+      if (btMatch) {
+        const idx = parseInt(btMatch[1]);
+        const v1 = params[paramIdx++];
+        const v2 = params[paramIdx++];
+        conditions.push({ col: betweens[idx].col, op: 'BETWEEN', val: [v1, v2], connector });
+        connector = 'AND';
+        continue;
+      }
+
+      const isNull    = trimmedPart.match(/"?(\w+)"?\s+IS\s+NULL/i);
+      const isNotNull = trimmedPart.match(/"?(\w+)"?\s+IS\s+NOT\s+NULL/i);
+      const inClause  = trimmedPart.match(/"?(\w+)"?\s+IN\s+\(([^)]+)\)/i);
+      const notIn     = trimmedPart.match(/"?(\w+)"?\s+NOT\s+IN\s+\(([^)]+)\)/i);
+      const basic     = trimmedPart.match(/"?(\w+)"?\s*(=|!=|>=|<=|>|<|LIKE|ILIKE)\s*\?/i);
+
+      if (isNotNull) {
+        conditions.push({ col: isNotNull[1], op: 'IS NOT NULL', val: null, connector });
+      } else if (isNull) {
+        conditions.push({ col: isNull[1], op: 'IS NULL', val: null, connector });
+      } else if (notIn) {
+        const count = notIn[2].split(',').length;
+        const values = params.slice(paramIdx, paramIdx + count);
+        paramIdx += count;
+        conditions.push({ col: notIn[1], op: 'NOT IN', val: values, connector });
+      } else if (inClause) {
+        const count = inClause[2].split(',').length;
+        const values = params.slice(paramIdx, paramIdx + count);
+        paramIdx += count;
+        conditions.push({ col: inClause[1], op: 'IN', val: values, connector });
+      } else if (basic) {
+        const val = params[paramIdx++];
+        conditions.push({ col: basic[1], op: basic[2].toUpperCase(), val, connector });
+      }
+
+      connector = 'AND';
+    }
+
+    return conditions;
+  }
+
+  private evalCondition(row: Row, cond: { col: string; op: string; val: any }): boolean {
+    const v = row[cond.col];
+    switch (cond.op) {
+      case '=':          return v == cond.val;
+      case '!=':         return v != cond.val;
+      case '>':          return v > cond.val;
+      case '>=':         return v >= cond.val;
+      case '<':          return v < cond.val;
+      case '<=':         return v <= cond.val;
+      case 'IS NULL':    return v === null || v === undefined;
+      case 'IS NOT NULL':return v !== null && v !== undefined;
+      case 'BETWEEN':    return v >= cond.val[0] && v <= cond.val[1];
+      case 'IN':         return (cond.val as any[]).includes(v);
+      case 'NOT IN':     return !(cond.val as any[]).includes(v);
+      case 'LIKE':
+      case 'ILIKE': {
+        const pattern = String(cond.val)
+          .replace(/%/g, '.*')
+          .replace(/_/g, '.');
+        const flags = cond.op === 'ILIKE' ? 'i' : '';
+        return new RegExp(`^${pattern}$`, flags).test(String(v ?? ''));
+      }
+      default: return true;
+    }
+  }
+}
