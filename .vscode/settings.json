@@ -1,0 +1,10 @@
+{
+  "typescript.tsconfig.path": "./tsconfig.dev.json",
+  "typescript.preferences.importModuleSpecifier": "relative",
+  "editor.formatOnSave": true,
+  "[typescript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "jest.jestCommandLine": "npx jest",
+  "jest.autoRun": "off"
+}

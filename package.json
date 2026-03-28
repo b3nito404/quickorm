@@ -1,0 +1,65 @@
+{
+  "name": "quickorm",
+  "version": "1.0.0",
+  "description": "A fast, decorator-based TypeScript ORM with a clean API — competing with TypeORM and Prisma",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "quickorm": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "lint": "eslint src/**/*.ts",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "orm",
+    "typescript",
+    "database",
+    "sql",
+    "decorator",
+    "repository",
+    "query-builder"
+  ],
+  "author": "QuickORM Team",
+  "license": "MIT",
+  "dependencies": {
+    "reflect-metadata": "^0.2.2"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.14.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  },
+  "peerDependencies": {
+    "better-sqlite3": "^9.6.0",
+    "mysql2": "^3.9.0",
+    "pg": "^8.11.0"
+  },
+  "peerDependenciesMeta": {
+    "pg": {
+      "optional": true
+    },
+    "mysql2": {
+      "optional": true
+    },
+    "better-sqlite3": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ]
+}
