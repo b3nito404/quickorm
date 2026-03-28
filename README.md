@@ -2,7 +2,7 @@
 
 A TypeScript ORM built around one idea: your database schema should follow your code, not the other way around.
 
-QuickORM uses decorators to map TypeScript classes to database tables. You define your entities, your relations, your constraints — and QuickORM handles the SQL, the mapping, the migrations, and the edge cases.
+QuickORM uses decorators to map TypeScript classes to database tables. You define your entities, your relations, your constraints and QuickORM handles the SQL, the mapping, the migrations, and the edge cases.
 
 Works with PostgreSQL, MySQL, SQLite, and an in-memory adapter for testing.
 
