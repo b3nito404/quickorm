@@ -20,7 +20,7 @@ export class MemoryAdapter extends BaseAdapter {
   private inTransaction: boolean = false;
   private snapshot: Map<string, Table> | null = null;
 
-  // ── Lifecycle ──────────────────────────────────────────────────────────────
+  // Lifecycle
 
   async connect(_config: DataSourceConfig): Promise<void> {
     this._connected = true;
@@ -31,11 +31,10 @@ export class MemoryAdapter extends BaseAdapter {
     this.tables.clear();
   }
 
-  // ── Transactions ───────────────────────────────────────────────────────────
+  // Transactions
 
   async beginTransaction(): Promise<void> {
     this.inTransaction = true;
-    // Deep-clone table state for rollback
     this.snapshot = new Map(
       Array.from(this.tables.entries()).map(([k, v]) => [k, v.map((r) => ({ ...r }))])
     );
@@ -54,7 +53,7 @@ export class MemoryAdapter extends BaseAdapter {
     this.inTransaction = false;
   }
 
-  // ── DDL ───────────────────────────────────────────────────────────────────
+  // DDL
 
   quoteIdentifier(id: string): string {
     return `"${id}"`;
@@ -64,28 +63,27 @@ export class MemoryAdapter extends BaseAdapter {
     return '?';
   }
 
-  // ── Core query engine ──────────────────────────────────────────────────────
+  // Core query engine
 
   async query<T = any>(sql: string, params: any[] = []): Promise<QueryResult<T>> {
     const s = sql.trim();
     try {
-      if (/^CREATE\s+TABLE/i.test(s))  return this.execCreateTable(s);
-      if (/^DROP\s+TABLE/i.test(s))    return this.execDropTable(s);
-      if (/^INSERT\s+INTO/i.test(s))   return this.execInsert(s, params);
-      if (/^SELECT/i.test(s))          return this.execSelect(s, params);
-      if (/^UPDATE/i.test(s))          return this.execUpdate(s, params);
-      if (/^DELETE\s+FROM/i.test(s))   return this.execDelete(s, params);
-      if (/^CREATE\s+INDEX/i.test(s))  return { rows: [], rowCount: 0 }; // no-op
-      if (/^DROP\s+INDEX/i.test(s))    return { rows: [], rowCount: 0 };
-      if (/^ALTER\s+TABLE/i.test(s))   return this.execAlterTable(s);
-      // Passthrough for unsupported — return empty
+      if (/^CREATE\s+TABLE/i.test(s)) return this.execCreateTable(s);
+      if (/^DROP\s+TABLE/i.test(s)) return this.execDropTable(s);
+      if (/^INSERT\s+INTO/i.test(s)) return this.execInsert(s, params);
+      if (/^SELECT/i.test(s)) return this.execSelect(s, params);
+      if (/^UPDATE/i.test(s)) return this.execUpdate(s, params);
+      if (/^DELETE\s+FROM/i.test(s)) return this.execDelete(s, params);
+      if (/^CREATE\s+INDEX/i.test(s)) return { rows: [], rowCount: 0 };
+      if (/^DROP\s+INDEX/i.test(s)) return { rows: [], rowCount: 0 };
+      if (/^ALTER\s+TABLE/i.test(s)) return this.execAlterTable(s);
       return { rows: [], rowCount: 0 };
     } catch (err: any) {
       throw new QueryError(err.message, sql, params, err);
     }
   }
 
-  // ── Table management (public helpers for SchemaBuilder) ───────────────────
+  // Table management
 
   ensureTable(name: string): void {
     if (!this.tables.has(name)) this.tables.set(name, []);
@@ -99,7 +97,7 @@ export class MemoryAdapter extends BaseAdapter {
     return this.tables.has(name);
   }
 
-  // ── DDL Executors ──────────────────────────────────────────────────────────
+  // DDL executors
 
   private execCreateTable(sql: string): QueryResult {
     const match = sql.match(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?(\w+)"?/i);
@@ -116,15 +114,13 @@ export class MemoryAdapter extends BaseAdapter {
     return { rows: [], rowCount: 0 };
   }
 
-  private execAlterTable(sql: string): QueryResult {
-    // For ALTER TABLE … ADD COLUMN — just ensure table exists
+  private execAlterTable(_sql: string): QueryResult {
     return { rows: [], rowCount: 0 };
   }
 
-  // ── DML Executors ──────────────────────────────────────────────────────────
+  // DML executors
 
   private execInsert(sql: string, params: any[]): QueryResult {
-    // INSERT INTO "table" ("col1","col2") VALUES (?,?)
     const tableMatch = sql.match(/INSERT\s+INTO\s+"?(\w+)"?/i);
     if (!tableMatch) throw new Error('Malformed INSERT statement');
     const tableName = tableMatch[1];
@@ -148,17 +144,14 @@ export class MemoryAdapter extends BaseAdapter {
   }
 
   private execSelect<T>(sql: string, params: any[]): QueryResult<T> {
-    // Support: SELECT * FROM "table" WHERE col = ? AND col2 = ? ORDER BY col ASC LIMIT n OFFSET n
     const tableMatch = sql.match(/FROM\s+"?(\w+)"?/i);
     if (!tableMatch) throw new Error('Could not parse SELECT table');
     const tableName = tableMatch[1];
 
     let rows: Row[] = [...(this.tables.get(tableName) ?? [])];
 
-    // WHERE
     rows = this.applyWhere(rows, sql, params);
 
-    // ORDER BY
     const orderMatch = sql.match(/ORDER\s+BY\s+(.+?)(?:\s+LIMIT|\s+OFFSET|$)/i);
     if (orderMatch) {
       const parts = orderMatch[1].trim().split(',');
@@ -166,41 +159,51 @@ export class MemoryAdapter extends BaseAdapter {
         const m = part.trim().match(/"?(\w+)"?\s*(ASC|DESC)?/i);
         if (m) {
           const field = m[1];
-          const dir   = (m[2] ?? 'ASC').toUpperCase();
+          const dir = (m[2] ?? 'ASC').toUpperCase();
           rows.sort((a, b) => {
             const av = a[field], bv = b[field];
             if (av == null && bv == null) return 0;
             if (av == null) return dir === 'ASC' ? -1 : 1;
             if (bv == null) return dir === 'ASC' ? 1 : -1;
-            return dir === 'ASC' ? (av < bv ? -1 : av > bv ? 1 : 0) : (av > bv ? -1 : av < bv ? 1 : 0);
+            return dir === 'ASC'
+              ? (av < bv ? -1 : av > bv ? 1 : 0)
+              : (av > bv ? -1 : av < bv ? 1 : 0);
           });
         }
       }
     }
 
-    // COUNT(*) — check for the unquoted expression form
-    if (/COUNT\(\*\)/i.test(sql) && /SELECT/i.test(sql)) {
-      // Apply WHERE first then count
+    // Aggregate functions: COUNT, SUM, AVG, MIN, MAX
+    if (/\b(COUNT|SUM|AVG|MIN|MAX)\s*\(/i.test(sql) && !/GROUP\s+BY/i.test(sql)) {
       const filtered = this.applyWhere([...rows], sql, params);
-      return { rows: [{ count: filtered.length } as any], rowCount: 1 };
+      const aggResult = this.computeAggregates(sql, filtered);
+      return { rows: [aggResult as any], rowCount: 1 };
     }
 
-    // LIMIT / OFFSET
-    const limitMatch  = sql.match(/LIMIT\s+(\d+)/i);
+    // GROUP BY with aggregates
+    if (/GROUP\s+BY/i.test(sql)) {
+      const filtered = this.applyWhere([...rows], sql, params);
+      const grouped = this.computeGroupBy(sql, filtered);
+      const having = this.applyHaving(grouped, sql);
+      return { rows: having as any[], rowCount: having.length };
+    }
+
+    const limitMatch = sql.match(/LIMIT\s+(\d+)/i);
     const offsetMatch = sql.match(/OFFSET\s+(\d+)/i);
     const offset = offsetMatch ? parseInt(offsetMatch[1]) : 0;
-    const limit  = limitMatch  ? parseInt(limitMatch[1]) : undefined;
+    const limit = limitMatch ? parseInt(limitMatch[1]) : undefined;
 
     if (offset) rows = rows.slice(offset);
     if (limit !== undefined) rows = rows.slice(0, limit);
 
-    // SELECT columns
     const selectPart = sql.match(/^SELECT\s+(.*?)\s+FROM/is)?.[1]?.trim();
     if (selectPart && selectPart !== '*') {
       const cols = selectPart.split(',').map((c) => c.trim().replace(/"/g, ''));
       rows = rows.map((r) => {
         const out: Row = {};
-        cols.forEach((c) => { out[c] = r[c]; });
+        cols.forEach((c) => {
+          out[c] = r[c];
+        });
         return out;
       });
     }
@@ -235,7 +238,9 @@ export class MemoryAdapter extends BaseAdapter {
     let updated = 0;
     for (const row of table) {
       if (toUpdate.includes(row)) {
-        setColumns.forEach((col, i) => { row[col] = setValues[i]; });
+        setColumns.forEach((col, i) => {
+          row[col] = setValues[i];
+        });
         updated++;
       }
     }
@@ -257,22 +262,143 @@ export class MemoryAdapter extends BaseAdapter {
     return { rows: [], rowCount: before - this.tables.get(tableName)!.length };
   }
 
-  // ── WHERE parsing ──────────────────────────────────────────────────────────
+  // WHERE parsing
 
   private applyWhere(rows: Row[], sql: string, params: any[]): Row[] {
     const whereMatch = sql.match(/WHERE\s+(.+?)(?:\s+ORDER|\s+LIMIT|\s+OFFSET|$)/is);
     if (!whereMatch) return rows;
 
-    const whereClause = whereMatch[1].trim();
-    const conditions  = this.parseWhereConditions(whereClause, params);
+    let whereClause = whereMatch[1].trim();
 
+    whereClause = this.resolveSubqueries(whereClause, params);
+
+    const conditions = this.parseWhereConditions(whereClause, params);
     return rows.filter((row) => conditions.every((cond) => this.evalCondition(row, cond)));
   }
 
+  private computeAggregates(sql: string, rows: Row[]): Row {
+    const result: Row = {};
+    const selectPart = sql.match(/^SELECT\s+(.+?)\s+FROM/is)?.[1] ?? '';
+    const exprs = selectPart.split(',').map((e) => e.trim());
+
+    for (const expr of exprs) {
+      const aliasMatch = expr.match(/(?:AS\s+)?"?(\w+)"?\s*$/i);
+      const alias = aliasMatch?.[1] ?? expr.replace(/[^a-z0-9_]/gi, '_');
+
+      if (/COUNT\(\*\)/i.test(expr)) {
+        result[alias] = rows.length;
+      } else {
+        const fnMatch = expr.match(/(COUNT|SUM|AVG|MIN|MAX)\s*\(\s*"?(\w+)"?\s*\)/i);
+        if (fnMatch) {
+          const fn = fnMatch[1].toUpperCase();
+          const col = fnMatch[2];
+          const vals = rows.map((r) => Number(r[col])).filter((v) => !isNaN(v));
+
+          switch (fn) {
+            case 'COUNT':
+              result[alias] = rows.filter((r) => r[col] != null).length;
+              break;
+            case 'SUM':
+              result[alias] = vals.reduce((a, b) => a + b, 0);
+              break;
+            case 'AVG':
+              result[alias] = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+              break;
+            case 'MIN':
+              result[alias] = vals.length ? Math.min(...vals) : null;
+              break;
+            case 'MAX':
+              result[alias] = vals.length ? Math.max(...vals) : null;
+              break;
+          }
+        } else {
+          const colMatch = expr.match(/"?(\w+)"?/);
+          if (colMatch && rows.length) result[alias] = rows[0][colMatch[1]];
+        }
+      }
+    }
+
+    return result;
+  }
+
+  private computeGroupBy(sql: string, rows: Row[]): Row[] {
+    const groupMatch = sql.match(/GROUP\s+BY\s+(.+?)(?:\s+HAVING|\s+ORDER|\s+LIMIT|$)/i);
+    if (!groupMatch) return rows;
+
+    const groupCols = groupMatch[1].split(',').map((c) => c.trim().replace(/"/g, ''));
+    const groups = new Map<string, Row[]>();
+
+    for (const row of rows) {
+      const key = groupCols.map((c) => String(row[c] ?? '')).join('||');
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(row);
+    }
+
+    return Array.from(groups.values()).map((grp) => this.computeAggregates(sql, grp));
+  }
+
+  private applyHaving(rows: Row[], sql: string): Row[] {
+    const havingMatch = sql.match(/HAVING\s+(.+?)(?:\s+ORDER|\s+LIMIT|$)/i);
+    if (!havingMatch) return rows;
+
+    const clause = havingMatch[1].trim();
+    const m = clause.match(/"?(\w+)"?\s*(=|!=|>|>=|<|<=)\s*([\d.]+)/);
+    if (!m) return rows;
+
+    const [, col, op, valStr] = m;
+    const val = parseFloat(valStr);
+
+    return rows.filter((row) => {
+      const v = Number(row[col]);
+      switch (op) {
+        case '=':
+          return v === val;
+        case '!=':
+          return v !== val;
+        case '>':
+          return v > val;
+        case '>=':
+          return v >= val;
+        case '<':
+          return v < val;
+        case '<=':
+          return v <= val;
+        default:
+          return true;
+      }
+    });
+  }
+
+  private resolveSubqueries(clause: string, _params: any[]): string {
+    const subRe = /"?(\w+)"?\s+IN\s+\(\s*SELECT\s+(.+?)\s+FROM\s+"?(\w+)"?(?:\s+WHERE\s+(.+?))?\s*\)/gi;
+    return clause.replace(subRe, (match, col, selectCol, fromTable, subWhere) => {
+      const table = this.getTable(fromTable);
+      if (!table.length) return `"${col}" IN (NULL)`;
+
+      const cleanCol = selectCol.trim().replace(/"/g, '');
+      let rows = [...table];
+
+      if (subWhere) {
+        const eqMatch = subWhere.match(/"?(\w+)"?\s*=\s*'([^']+)'/);
+        if (eqMatch) {
+          rows = rows.filter((r) => String(r[eqMatch[1]]) === eqMatch[2]);
+        }
+      }
+
+      const values = rows.map((r) => r[cleanCol]).filter((v) => v != null);
+      if (!values.length) return `"${col}" IN (NULL)`;
+
+      const placeholders = values.map((v) => (typeof v === 'string' ? `'${v}'` : String(v)));
+      return `"${col}" IN (${placeholders.join(', ')})`;
+    });
+  }
+
   private parseWhereConditions(clause: string, params: any[]): Array<{
-    col: string; op: string; val: any; connector: string;
+    col: string;
+    op: string;
+    val: any;
+    connector: string;
   }> {
-    // First, replace BETWEEN ? AND ? with a sentinel so the AND inside doesn't split
     const betweens: Array<{ col: string }> = [];
     let normalized = clause.replace(
       /"?(\w+)"?\s+BETWEEN\s+\?\s+AND\s+\?/gi,
@@ -282,7 +408,6 @@ export class MemoryAdapter extends BaseAdapter {
       }
     );
 
-    // Split on AND/OR at word boundaries
     const parts = normalized.split(/\s+(AND|OR)\s+/i);
     const conditions: Array<{ col: string; op: string; val: any; connector: string }> = [];
     let paramIdx = 0;
@@ -296,7 +421,6 @@ export class MemoryAdapter extends BaseAdapter {
 
       const trimmedPart = part.trim();
 
-      // Restore BETWEEN sentinel
       const btMatch = trimmedPart.match(/^__BETWEEN_(\d+)__$/);
       if (btMatch) {
         const idx = parseInt(btMatch[1]);
@@ -307,25 +431,29 @@ export class MemoryAdapter extends BaseAdapter {
         continue;
       }
 
-      const isNull    = trimmedPart.match(/"?(\w+)"?\s+IS\s+NULL/i);
+      const isNull = trimmedPart.match(/"?(\w+)"?\s+IS\s+NULL/i);
       const isNotNull = trimmedPart.match(/"?(\w+)"?\s+IS\s+NOT\s+NULL/i);
-      const inClause  = trimmedPart.match(/"?(\w+)"?\s+IN\s+\(([^)]+)\)/i);
-      const notIn     = trimmedPart.match(/"?(\w+)"?\s+NOT\s+IN\s+\(([^)]+)\)/i);
-      const basic     = trimmedPart.match(/"?(\w+)"?\s*(=|!=|>=|<=|>|<|LIKE|ILIKE)\s*\?/i);
+      const inClause = trimmedPart.match(/"?(\w+)"?\s+IN\s+\(([^)]+)\)/i);
+      const notIn = trimmedPart.match(/"?(\w+)"?\s+NOT\s+IN\s+\(([^)]+)\)/i);
+      const basic = trimmedPart.match(/"?(\w+)"?\s*(=|!=|>=|<=|>|<|LIKE|ILIKE)\s*\?/i);
 
       if (isNotNull) {
         conditions.push({ col: isNotNull[1], op: 'IS NOT NULL', val: null, connector });
       } else if (isNull) {
         conditions.push({ col: isNull[1], op: 'IS NULL', val: null, connector });
       } else if (notIn) {
-        const count = notIn[2].split(',').length;
-        const values = params.slice(paramIdx, paramIdx + count);
-        paramIdx += count;
+        const rawNotIn = notIn[2].trim();
+        const values = rawNotIn.includes('?')
+          ? params.slice(paramIdx, paramIdx + rawNotIn.split(',').length)
+          : rawNotIn.split(',').map((v: string) => v.trim().replace(/^'|'$/g, ''));
+        paramIdx += rawNotIn.includes('?') ? rawNotIn.split(',').length : 0;
         conditions.push({ col: notIn[1], op: 'NOT IN', val: values, connector });
       } else if (inClause) {
-        const count = inClause[2].split(',').length;
-        const values = params.slice(paramIdx, paramIdx + count);
-        paramIdx += count;
+        const rawIn = inClause[2].trim();
+        const values = rawIn.includes('?')
+          ? params.slice(paramIdx, paramIdx + rawIn.split(',').length)
+          : rawIn.split(',').map((v: string) => v.trim().replace(/^'|'$/g, ''));
+        paramIdx += rawIn.includes('?') ? rawIn.split(',').length : 0;
         conditions.push({ col: inClause[1], op: 'IN', val: values, connector });
       } else if (basic) {
         const val = params[paramIdx++];
@@ -341,17 +469,28 @@ export class MemoryAdapter extends BaseAdapter {
   private evalCondition(row: Row, cond: { col: string; op: string; val: any }): boolean {
     const v = row[cond.col];
     switch (cond.op) {
-      case '=':          return v == cond.val;
-      case '!=':         return v != cond.val;
-      case '>':          return v > cond.val;
-      case '>=':         return v >= cond.val;
-      case '<':          return v < cond.val;
-      case '<=':         return v <= cond.val;
-      case 'IS NULL':    return v === null || v === undefined;
-      case 'IS NOT NULL':return v !== null && v !== undefined;
-      case 'BETWEEN':    return v >= cond.val[0] && v <= cond.val[1];
-      case 'IN':         return (cond.val as any[]).includes(v);
-      case 'NOT IN':     return !(cond.val as any[]).includes(v);
+      case '=':
+        return v == cond.val;
+      case '!=':
+        return v != cond.val;
+      case '>':
+        return v > cond.val;
+      case '>=':
+        return v >= cond.val;
+      case '<':
+        return v < cond.val;
+      case '<=':
+        return v <= cond.val;
+      case 'IS NULL':
+        return v === null || v === undefined;
+      case 'IS NOT NULL':
+        return v !== null && v !== undefined;
+      case 'BETWEEN':
+        return v >= cond.val[0] && v <= cond.val[1];
+      case 'IN':
+        return (cond.val as any[]).includes(v);
+      case 'NOT IN':
+        return !(cond.val as any[]).includes(v);
       case 'LIKE':
       case 'ILIKE': {
         const pattern = String(cond.val)
@@ -360,7 +499,8 @@ export class MemoryAdapter extends BaseAdapter {
         const flags = cond.op === 'ILIKE' ? 'i' : '';
         return new RegExp(`^${pattern}$`, flags).test(String(v ?? ''));
       }
-      default: return true;
+      default:
+        return true;
     }
   }
 }

@@ -1,0 +1,19 @@
+{
+  "name": "quickorm-test-app",
+  "version": "1.0.0",
+  "description": "Test project for QuickORM",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev":   "ts-node -r reflect-metadata src/index.ts",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "quickorm": "*",
+    "reflect-metadata": "^0.2.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "ts-node":    "^10.9.0",
+    "typescript": "^5.4.0"
+  }
+}

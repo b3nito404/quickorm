@@ -165,12 +165,13 @@ ${downLines || '    // TODO: add down statements'}
 
   private actionsForExistingTable(entity: EntityMetadata, live: LiveTable): DiffAction[] {
     const actions: DiffAction[] = [];
-    const q = (s: string) => this.adapter.quoteIdentifier(s);
+    const q   = (s: string) => this.adapter.quoteIdentifier(s);
+    const t   = this.adapter.type;
 
-    const liveColNames = new Set(live.columns.map((c) => c.columnName));
+    const liveColMap = new Map(live.columns.map((c) => [c.columnName, c]));
 
     for (const col of entity.columns) {
-      if (!liveColNames.has(col.columnName)) {
+      if (!liveColMap.has(col.columnName)) {
         // Column missing —> generate ADD COLUMN
         const colSql = this.buildColumnSql(col, q);
         actions.push({
@@ -180,6 +181,33 @@ ${downLines || '    // TODO: add down statements'}
           description: `ADD COLUMN ${entity.tableName}.${col.columnName}`,
           reverseSql: `ALTER TABLE ${q(entity.tableName)} DROP COLUMN ${q(col.columnName)}`,
         });
+      } else {
+        // Column exists — check for type change
+        const liveCol = liveColMap.get(col.columnName)!;
+        const desiredType = this.mapType(col).toUpperCase().split('(')[0];
+        const liveType    = liveCol.type.toUpperCase().split('(')[0];
+
+        if (!this.typesMatch(desiredType, liveType)) {
+          const newTypeSql = this.mapType(col);
+          let alterSql: string;
+
+          if (t === 'postgres') {
+            alterSql = `ALTER TABLE ${q(entity.tableName)} ALTER COLUMN ${q(col.columnName)} TYPE ${newTypeSql} USING ${q(col.columnName)}::${newTypeSql}`;
+          } else if (t === 'mysql') {
+            const colDef = this.buildColumnSql(col, q);
+            alterSql = `ALTER TABLE ${q(entity.tableName)} MODIFY COLUMN ${colDef}`;
+          } else {
+            // SQLite does not support ALTER COLUMN — skip silently
+            continue;
+          }
+
+          actions.push({
+            type: 'ALTER_COLUMN',
+            tableName: entity.tableName,
+            sql: alterSql,
+            description: `ALTER COLUMN ${entity.tableName}.${col.columnName} (${liveType} → ${desiredType})`,
+          });
+        }
       }
       // Note: ALTER COLUMN (type changes) are intentionally skipped —> destructive and dialect-specific
     }
@@ -200,6 +228,24 @@ ${downLines || '    // TODO: add down statements'}
     }
 
     return actions;
+  }
+
+  private typesMatch(desired: string, live: string): boolean {
+    const aliases: Record<string, string[]> = {
+      'INTEGER':          ['INT', 'INTEGER', 'TINYINT', 'SMALLINT'],
+      'VARCHAR':          ['VARCHAR', 'CHARACTER VARYING'],
+      'BOOLEAN':          ['BOOLEAN', 'BOOL', 'TINYINT'],
+      'TIMESTAMP':        ['TIMESTAMP', 'DATETIME', 'TIMESTAMP WITHOUT TIME ZONE'],
+      'DOUBLE PRECISION': ['DOUBLE', 'DOUBLE PRECISION', 'FLOAT8'],
+      'FLOAT':            ['FLOAT', 'REAL', 'FLOAT4'],
+      'TEXT':             ['TEXT', 'CLOB', 'LONGTEXT'],
+      'UUID':             ['UUID', 'VARCHAR'],
+    };
+    if (desired === live) return true;
+    for (const group of Object.values(aliases)) {
+      if (group.includes(desired) && group.includes(live)) return true;
+    }
+    return false;
   }
 
   private buildColumnSql(col: ColumnMetadata, q: (s: string) => string): string {

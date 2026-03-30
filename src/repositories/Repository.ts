@@ -370,14 +370,65 @@ export class Repository<T extends object> {
 
   protected hydrate(row: Record<string, any>): T {
     const instance = new this.entity();
+
+    // Map column values
     for (const col of this.meta.columns) {
       let val = row[col.columnName];
-      if (val === undefined) val = row[col.propertyKey]; // fallback for memory adapter
+      if (val === undefined) val = row[col.propertyKey];
       if (col.options.transformer && val !== undefined) {
         val = col.options.transformer.from(val);
       }
       (instance as any)[col.propertyKey] = val;
     }
+
+    // Inject lazy relation getters
+    for (const relation of this.meta.relations) {
+      if (!relation.lazy) continue;
+      const adapter  = this.adapter;
+      const fkProp   = relation.foreignKey.replace(/_([a-z])/g, (_, l) => l.toUpperCase());
+      const fkValue  = (instance as any)[fkProp] ?? (instance as any)[relation.foreignKey];
+      const targetClass = relation.target();
+
+      let targetMeta: any;
+      try { targetMeta = metadataStorage.getEntityMetadata(targetClass); } catch { continue; }
+      const targetPk   = metadataStorage.getPrimaryColumn(targetClass);
+
+      if (relation.type === 'many-to-one' || relation.type === 'one-to-one') {
+        let cached: any;
+        let loaded = false;
+        Object.defineProperty(instance, relation.propertyKey, {
+          get(): Promise<any> {
+            if (loaded) return Promise.resolve(cached);
+            if (fkValue == null) { loaded = true; cached = null; return Promise.resolve(null); }
+            return new QueryBuilder(adapter)
+              .from(targetMeta.tableName)
+              .where(targetPk.columnName, '=', fkValue)
+              .getOne()
+              .then((r: any) => { cached = r; loaded = true; return r; });
+          },
+          configurable: true,
+          enumerable: true,
+        });
+      } else if (relation.type === 'one-to-many') {
+        const ownerPkMeta = metadataStorage.getPrimaryColumn(this.entity);
+        const ownerPkVal  = (instance as any)[ownerPkMeta.propertyKey];
+        let cached: any;
+        let loaded = false;
+        Object.defineProperty(instance, relation.propertyKey, {
+          get(): Promise<any[]> {
+            if (loaded) return Promise.resolve(cached);
+            return new QueryBuilder(adapter)
+              .from(targetMeta.tableName)
+              .where(relation.foreignKey, '=', ownerPkVal)
+              .getMany()
+              .then((r: any[]) => { cached = r; loaded = true; return r; });
+          },
+          configurable: true,
+          enumerable: true,
+        });
+      }
+    }
+
     return instance;
   }
 

@@ -69,6 +69,7 @@ export interface RelationOptions {
   onDelete?: 'CASCADE' | 'SET NULL' | 'RESTRICT' | 'NO ACTION';
   onUpdate?: 'CASCADE' | 'SET NULL' | 'RESTRICT' | 'NO ACTION';
   inverseSide?: string;
+  lazy?: boolean;
 }
 
 export interface JoinTableOptions {
@@ -102,6 +103,7 @@ export interface RelationMetadata {
   nullable: boolean;
   onDelete: string;
   onUpdate: string;
+  lazy: boolean;
   joinTable?: JoinTableOptions;
   inverseSide?: string;
 }

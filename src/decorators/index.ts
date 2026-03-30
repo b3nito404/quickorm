@@ -172,6 +172,7 @@ function buildRelation(
     onDelete: options.onDelete ?? 'NO ACTION',
     onUpdate: options.onUpdate ?? 'NO ACTION',
     inverseSide: options.inverseSide,
+    lazy: options.lazy ?? false,
   };
 }
 
