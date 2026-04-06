@@ -1,6 +1,6 @@
 {
   "name": "quickorm",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "A fast, decorator-based TypeScript ORM with a clean API — competing with TypeORM and Prisma",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
